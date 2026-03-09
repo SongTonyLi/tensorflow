@@ -22,6 +22,7 @@ limitations under the License.
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/strings/match.h"
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/synchronization/notification.h"
@@ -32,6 +33,7 @@ limitations under the License.
 #include "xla/tsl/platform/types.h"
 #include "xla/tsl/profiler/utils/math_utils.h"
 #include "xla/tsl/profiler/utils/time_utils.h"
+#include "tsl/profiler/lib/traceme_encode.h"
 
 namespace tsl {
 namespace profiler {
@@ -185,6 +187,22 @@ TEST(RecorderTest, Multithreaded) {
     EXPECT_GT(thread.events.size(), 1)
         << "Expected gaps in thread events between sessions";
   }
+}
+
+TEST(RecorderTest, ToggleSourceLoc) {
+  // By default it should be enabled.
+  EXPECT_TRUE(TraceMeRecorder::EnableSourceLocation());
+  EXPECT_TRUE(absl::StrContains(TraceMeEncode("Hello", {}), "_src="));
+
+  TraceMeRecorder::Start(/*level=*/1, /*filter_mask=*/-1,
+                         /*enable_source_location=*/false);
+  EXPECT_FALSE(TraceMeRecorder::EnableSourceLocation());
+  EXPECT_FALSE(absl::StrContains(TraceMeEncode("Hello", {}), "_src="));
+  EXPECT_EQ(TraceMeEncode("Hello", {}), "Hello");
+
+  TraceMeRecorder::Stop();
+  // Reset after stop.
+  EXPECT_TRUE(TraceMeRecorder::EnableSourceLocation());
 }
 
 }  // namespace

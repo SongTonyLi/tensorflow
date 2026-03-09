@@ -36,6 +36,7 @@ namespace internal {
 // Modified by TraceMeRecorder singleton when tracing starts/stops.
 TF_EXPORT extern std::atomic<int> g_trace_level;
 TF_EXPORT extern std::atomic<uint64_t> g_trace_filter_bitmap;
+TF_EXPORT extern std::atomic<bool> g_enable_source_location;
 
 }  // namespace internal
 
@@ -93,6 +94,9 @@ class TraceMeRecorder {
   // recording. Filter will be applied only if record function (e.g. TraceMe,
   // ActivityStart, InstantActivity etc.) with filter_mask is called.
   static bool Start(int level, uint64_t filter_mask);
+  // Starts recording of TraceMe() with filter and source location option.
+  static bool Start(int level, uint64_t filter_mask,
+                    bool enable_source_location);
 
   // Stops recording and returns events recorded since Start().
   // Events passed to Record after Stop has started will be dropped.
@@ -106,6 +110,11 @@ class TraceMeRecorder {
   // Returns whether the filter is enabled.
   static inline bool CheckFilter(uint64_t filter) {
     return internal::g_trace_filter_bitmap & filter;
+  }
+
+  // Returns whether source location is enabled.
+  static inline bool EnableSourceLocation() {
+    return internal::g_enable_source_location.load(std::memory_order_acquire);
   }
 
   // Default value for trace_level_ when tracing is disabled
