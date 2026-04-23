@@ -5,6 +5,7 @@ load("@cuda_cudart//:version.bzl", _cudart_version = "VERSION")
 load("@local_config_cuda//cuda:build_defs.bzl", "if_cuda")
 load("@local_config_syslibs//:build_defs.bzl", "if_not_system_lib")
 load("@nvidia_wheel_versions//:versions.bzl", "NVIDIA_WHEEL_VERSIONS")
+load("@rules_python//python:defs.bzl", "py_binary", "py_test")
 load(
     "@xla//third_party/py:py_import.bzl",
     "py_import",
@@ -14,7 +15,6 @@ load(
     "verify_manylinux_compliance_test",
 )
 load("@xla//third_party/py:python_wheel.bzl", "collect_data_files", "transitive_py_deps")
-load("@xla//third_party/rules_python/python:defs.bzl", "py_binary", "py_test")
 load("@xla//xla/tsl/mkl:build_defs.bzl", "if_enable_mkl", "if_mkl", "if_mkl_ml")
 load("//tensorflow:tensorflow.bzl", "if_wheel_dependency", "if_with_tpu_support", "transitive_hdrs")
 load("//tensorflow:tf_version.bzl", "TF_SEMANTIC_VERSION_SUFFIX", "TF_VERSION")
@@ -26,6 +26,8 @@ load(
     "tf_exec_properties",
 )
 load("//tensorflow/tools/pip_package/utils:tf_wheel.bzl", "tf_wheel", "tf_wheel_dep")
+
+_cuda_major_version_number = _cudart_version.split(".")[0] if _cudart_version else "12"
 
 package(default_visibility = ["//visibility:public"])
 
@@ -226,7 +228,6 @@ COMMON_PIP_DEPS = [
     "//tensorflow/tools/common:test_module1",
     "//tensorflow/tools/common:traverse",
     "//tensorflow/tools/docs:tf_doctest_lib",
-    "@tsl//tsl/profiler/protobuf:trace_events_proto_py",
     "//tensorflow/python/distribute:parameter_server_strategy_v2",
     "//tensorflow/python/distribute/coordinator:cluster_coordinator",
     "//tensorflow/python/distribute/coordinator:remote_eager_lib",
@@ -285,14 +286,16 @@ genrule(
     srcs = ["setup.py.tpl"],
     outs = ["setup.py"],
     cmd = """
+      CUDA_MAJOR_VERSION="{cuda_version}"
       $(location :modify_setup_py_binary) \\
           --template_file $(location setup.py.tpl) \\
           --output_file $(OUTS) \\
           --nvidia_wheel_versions_data '{nvidia_wheel_versions}' \\
           --tf_version "{wheel_version}{wheel_version_suffix}" \\
-          --cuda_version {cuda_version}
+          --cuda_version "$$CUDA_MAJOR_VERSION"
+      perl -pi -e "s/cuda_major_version = ''.*# placeholder/cuda_major_version = '$$CUDA_MAJOR_VERSION'/g" $(OUTS)
     """.format(
-        cuda_version = _cudart_version or "12",
+        cuda_version = _cuda_major_version_number,
         nvidia_wheel_versions = NVIDIA_WHEEL_VERSIONS,
         wheel_version = TF_VERSION,
         wheel_version_suffix = TF_SEMANTIC_VERSION_SUFFIX,
@@ -308,6 +311,14 @@ py_binary(
         "//:LICENSE",
     ],
     main = "setup.py",
+)
+
+filegroup(
+    name = "py_deps_merged",
+    srcs = [
+        ":cc_deps",
+        ":py_deps",
+    ],
 )
 
 tf_wheel(
@@ -366,8 +377,7 @@ tf_wheel(
         "MANIFEST.in",
         "//tensorflow/tools/pip_package:THIRD_PARTY_NOTICES.txt",
         ":setup_py",
-        ":cc_deps",
-        ":py_deps",
+        ":py_deps_merged",
         "//tensorflow:tf_python_api_gen_v2",
     ] + select({
         "//tensorflow:dynamic_loaded_kernels": if_pywrap(
@@ -396,7 +406,7 @@ tf_wheel(
     }) + if_mkl_ml(["@xla//xla/tsl/mkl:intel_binary_blob"]),
     xla_aot_compiled = [
         "//tensorflow/compiler/tf2xla:xla_compiled_cpu_runtime_srcs",
-        ":xla_cmake",
+        "//tensorflow/tools/pip_package:xla_cmake",
     ],
 )
 
@@ -489,18 +499,31 @@ py_import(
     name = "tf_py_import",
     wheel = ":wheel",
     wheel_deps = if_cuda([
+        "@pypi//nvidia_cublas",
+        "@pypi//nvidia_cuda_cupti",
+        "@pypi//nvidia_cuda_nvcc",
+        "@pypi//nvidia_cuda_nvrtc",
+        "@pypi//nvidia_cuda_runtime",
+        "@pypi//nvidia_cufft",
+        "@pypi//nvidia_curand",
+        "@pypi//nvidia_cusolver",
+        "@pypi//nvidia_cusparse",
+        "@pypi//nvidia_nvjitlink",
+        "@pypi//nvidia_cudnn_cu13",
+        "@pypi//nvidia_nccl_cu13",
+        "@pypi//nvidia_nvshmem_cu13",
         "@pypi//nvidia_cublas_cu12",
         "@pypi//nvidia_cuda_cupti_cu12",
         "@pypi//nvidia_cuda_nvcc_cu12",
         "@pypi//nvidia_cuda_nvrtc_cu12",
         "@pypi//nvidia_cuda_runtime_cu12",
-        "@pypi//nvidia_cudnn_cu12",
         "@pypi//nvidia_cufft_cu12",
         "@pypi//nvidia_curand_cu12",
         "@pypi//nvidia_cusolver_cu12",
         "@pypi//nvidia_cusparse_cu12",
-        "@pypi//nvidia_nccl_cu12",
         "@pypi//nvidia_nvjitlink_cu12",
+        "@pypi//nvidia_cudnn_cu12",
+        "@pypi//nvidia_nccl_cu12",
         "@pypi//nvidia_nvshmem_cu12",
     ]),
     deps = [
