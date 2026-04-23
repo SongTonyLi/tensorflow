@@ -55,7 +55,7 @@ absl::Status RunRaggedAllToAllKernel(
     std::variant<stream_executor::gpu::RaggedAllToAllOutputPtrs,
                  se::DeviceAddressBase, xla::SymmetricMemory*>
         output_ptrs,
-    se::DeviceAddressBase input_offsets_buffer,
+    size_t output_sym_offset, se::DeviceAddressBase input_offsets_buffer,
     se::DeviceAddressBase send_sizes_buffer,
     se::DeviceAddressBase output_offsets_buffer, int64_t num_outputs,
     int64_t num_updates_per_output, int64_t num_input_rows,

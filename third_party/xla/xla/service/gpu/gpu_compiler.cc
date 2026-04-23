@@ -2160,6 +2160,28 @@ bool UsesCollectiveMemorySpaceFrontendAttr(const HloUse& use) {
   return false;
 }
 
+bool IsRaggedAllToAll(const HloInstruction* inst) {
+  return inst->opcode() == HloOpcode::kRaggedAllToAll ||
+         ((inst->opcode() == HloOpcode::kAsyncStart ||
+           inst->opcode() == HloOpcode::kAsyncDone) &&
+          inst->async_wrapped_opcode() == HloOpcode::kRaggedAllToAll);
+}
+
+bool IsRa2aZeroCopyEnabled(const HloModule* module) {
+  const auto& opts = module->config().debug_options();
+  return opts.xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl() &&
+         opts.xla_gpu_experimental_ragged_all_to_all_zero_copy();
+}
+
+// We want to insert the outbound copy (S1 to S0) at the boundary of the
+// entry computation. This picker identifies the position where the
+// collective-memory-spaced value is consumed by the module's ROOT instruction
+bool CollectiveMemoryOutputPositionPicker(const HloPosition& position) {
+  const HloInstruction* inst = position.instruction;
+  return inst->parent() == inst->GetModule()->entry_computation() &&
+         inst == inst->parent()->root_instruction();
+}
+
 bool ShouldAddCopyForCollectiveMemorySpace(const HloValue* value) {
   const HloInstruction* inst = value->defining_instruction();
   const HloModule* module = inst->GetModule();
@@ -2181,6 +2203,22 @@ bool ShouldAddCopyForCollectiveMemorySpace(const HloValue* value) {
           UsesCollectiveMemorySpaceFrontendAttr(use)) {
         return true;
       }
+      // RA2A one-shot zero-Copy logic
+      if (IsRa2aZeroCopyEnabled(module) && IsRaggedAllToAll(use.instruction) &&
+          use.operand_number == 1) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Identifies IF an outbound copy (S1 -> S0) is needed
+bool ShouldAddCopyForCollectiveMemoryOutput(const HloValue* value) {
+  const HloInstruction* inst = value->defining_instruction();
+  if (value->live_out_of_module() && IsRa2aZeroCopyEnabled(inst->GetModule())) {
+    if (IsRaggedAllToAll(inst)) {
+      return true;
     }
   }
   return false;
@@ -2211,6 +2249,10 @@ absl::Status RunPostSchedulingCopyInsertion(HloModule* module,
   // out of the graph. So run AddSpecialCaseCopies to re-insert these copies.
   RETURN_IF_ERROR(copy_insertion.CopyInsertion::AddSpecialCaseCopies(
       module, /*execution_threads=*/{}, ShouldAddCopyForCollectiveMemorySpace));
+
+  RETURN_IF_ERROR(copy_insertion.CopyInsertion::AddSpecialCaseCopies(
+      module, /*execution_threads=*/{}, ShouldAddCopyForCollectiveMemoryOutput,
+      CollectiveMemoryOutputPositionPicker));
 
   RETURN_IF_ERROR(HloDCE().Run(module).status());
 

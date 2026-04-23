@@ -67,7 +67,7 @@ struct alignas(kSize) Vec {
 template <typename PtrStorage, int64_t kVectorSize>
 __global__ void __launch_bounds__(128)
     RaggedAllToAllKernelImpl(const void* __restrict__ input_ptr,
-                             PtrStorage output_ptrs,
+                             PtrStorage output_ptrs, size_t output_sym_offset,
                              const int64_t* __restrict__ input_offsets_ptr,
                              const int64_t* __restrict__ send_sizes_ptr,
                              const int64_t* __restrict__ output_offsets_ptr,
@@ -80,8 +80,8 @@ __global__ void __launch_bounds__(128)
 
   if constexpr (std::is_same_v<PtrStorage, void*>) {
 #if NCCL_VERSION_CODE >= 22800
-    output_ptr = static_cast<T* __restrict__>(
-        ncclGetLsaPointer((ncclWindow_t)output_ptrs, 0, blockIdx.x));
+    output_ptr = static_cast<T* __restrict__>(ncclGetLsaPointer(
+        (ncclWindow_t)output_ptrs, output_sym_offset, blockIdx.x));
 #else
     assert(false &&
            "Can not use the LSA feature with NCCL version less than 2.28.0.");

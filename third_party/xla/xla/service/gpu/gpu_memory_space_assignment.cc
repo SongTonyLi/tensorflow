@@ -147,6 +147,13 @@ bool IsCollectiveMemoryInstruction(const HloInstruction* inst) {
           kSupportedCollectiveOpcodes->contains(inst->async_wrapped_opcode()));
 }
 
+bool IsRaggedAllToAll(const HloInstruction* inst) {
+  return inst->opcode() == HloOpcode::kRaggedAllToAll ||
+         ((inst->opcode() == HloOpcode::kAsyncStart ||
+           inst->opcode() == HloOpcode::kAsyncDone) &&
+          inst->async_wrapped_opcode() == HloOpcode::kRaggedAllToAll);
+}
+
 bool HasCollectiveMemoryInstruction(const HloValue& input_alias,
                                     bool require_nvshmem = false) {
   // Tuple-shaped values are pointer containers and never hold data that needs
@@ -229,6 +236,25 @@ static absl::StatusOr<MemorySpaceColor> GetCustomCallOperandMemorySpace(
   return MemorySpaceColor::kDefault;
 }
 
+bool IsSymmetricRaggedAllToAllValue(const HloValue& value) {
+  if (value.shape().IsTuple()) {
+    return false;
+  }
+
+  // Check if the value is DEFINED by an RA2A (the result)
+  if (IsRaggedAllToAll(value.defining_instruction())) {
+    return true;
+  }
+
+  // Check if the value is USED by an RA2A as the destination (Operand 1)
+  for (const HloUse& use : value.GetUses()) {
+    if (IsRaggedAllToAll(use.instruction) && use.operand_number == 1) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Returns the memory space requested for a custom call result value, or
 // MemorySpaceColor::kDefault if none is specified.
 static absl::StatusOr<MemorySpaceColor> GetCustomCallResultMemorySpace(
@@ -262,6 +288,7 @@ static absl::StatusOr<MemorySpaceColor> GetCustomCallResultMemorySpace(
 // Also assigns memory space colors for custom call operands and results based
 // on `operands_memory_spaces` and `results_memory_spaces` frontend attributes.
 absl::Status AssignColors(bool use_collective_memory, bool use_nvshmem,
+                          bool ra2a_use_collective_memory_operand_1,
                           HloAliasAnalysis* alias_analysis) {
   for (HloValue* value : alias_analysis->dataflow_analysis().values()) {
     // If the value has a layout with non-default memory space, use the memory
@@ -309,6 +336,11 @@ absl::Status AssignColors(bool use_collective_memory, bool use_nvshmem,
         // This is a temporary solution until a separate BFC allocator will be
         // added for the symmetric memory space.
         value->set_color((int)MemorySpaceColor::kCollective);
+      } else if (ra2a_use_collective_memory_operand_1 &&
+                 IsSymmetricRaggedAllToAllValue(*alias)) {
+        // One-shot zero-copy RaggedAllToAll requires symmetric memory for
+        // operand 1.
+        value->set_color((int)MemorySpaceColor::kCollective);
       } else if (HasSymmetricMemoryInstruction(*alias)) {
         // Device-initiated and one-sided collectives require symmetric memory.
         value->set_color((int)MemorySpaceColor::kCollective);
@@ -338,9 +370,19 @@ BufferAssigner::Colorer CreateColorer(const DebugOptions& option) {
 
   bool use_collective_memory = nccl_user_buffers || nccl_symmetric_buffers;
 
-  return [use_collective_memory, use_nvshmem](HloAliasAnalysis* alias_analysis,
-                                              const HloOrdering&) {
-    return AssignColors(use_collective_memory, use_nvshmem, alias_analysis);
+  // Specific RA2A Zero-Copy flags
+  bool ra2a_use_barrier =
+      option.xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl();
+  bool ra2a_zero_copy =
+      option.xla_gpu_experimental_ragged_all_to_all_zero_copy();
+  bool ra2a_use_collective_memory_operand_1 =
+      ra2a_use_barrier && ra2a_zero_copy;
+
+  return [use_collective_memory, use_nvshmem,
+          ra2a_use_collective_memory_operand_1](
+             HloAliasAnalysis* alias_analysis, const HloOrdering&) {
+    return AssignColors(use_collective_memory, use_nvshmem,
+                        ra2a_use_collective_memory_operand_1, alias_analysis);
   };
 }
 }  // namespace xla::gpu

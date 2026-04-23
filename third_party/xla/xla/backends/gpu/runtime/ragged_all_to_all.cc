@@ -45,7 +45,7 @@ absl::Status LaunchTypedKernel(se::Stream* stream, se::StreamExecutor* executor,
                                const se::ThreadDim& thread_dims,
                                const se::BlockDim& block_dims,
                                se::DeviceAddressBase input_buffer,
-                               PtrStorage output_ptrs,
+                               PtrStorage output_ptrs, size_t output_sym_offset,
                                se::DeviceAddressBase input_offsets_buffer,
                                se::DeviceAddressBase send_sizes_buffer,
                                se::DeviceAddressBase output_offsets_buffer,
@@ -59,9 +59,9 @@ absl::Status LaunchTypedKernel(se::Stream* stream, se::StreamExecutor* executor,
           executor));
 
   return kernel.Launch(thread_dims, block_dims, stream, input_buffer,
-                       output_ptrs, input_offsets_buffer, send_sizes_buffer,
-                       output_offsets_buffer, num_updates_per_output,
-                       num_row_elements);
+                       output_ptrs, output_sym_offset, input_offsets_buffer,
+                       send_sizes_buffer, output_offsets_buffer,
+                       num_updates_per_output, num_row_elements);
 }
 
 }  // namespace
@@ -80,7 +80,7 @@ absl::Status RunRaggedAllToAllKernel(
     std::variant<stream_executor::gpu::RaggedAllToAllOutputPtrs,
                  se::DeviceAddressBase, xla::SymmetricMemory*>
         output_ptrs,
-    se::DeviceAddressBase input_offsets_buffer,
+    size_t output_sym_offset, se::DeviceAddressBase input_offsets_buffer,
     se::DeviceAddressBase send_sizes_buffer,
     se::DeviceAddressBase output_offsets_buffer, int64_t num_outputs,
     int64_t num_updates_per_output, int64_t num_input_rows,
@@ -123,8 +123,9 @@ absl::Status RunRaggedAllToAllKernel(
         [&](auto& arg) -> absl::Status {
           return LaunchTypedKernel<std::decay_t<decltype(arg)>, T::value>(
               stream, executor, thread_dims, block_dims, input_buffer, arg,
-              input_offsets_buffer, send_sizes_buffer, output_offsets_buffer,
-              num_updates_per_output, num_vectorized_row_elements);
+              output_sym_offset, input_offsets_buffer, send_sizes_buffer,
+              output_offsets_buffer, num_updates_per_output,
+              num_vectorized_row_elements);
         },
         output_ptrs);
   };

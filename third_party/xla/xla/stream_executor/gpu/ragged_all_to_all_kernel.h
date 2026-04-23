@@ -19,6 +19,7 @@ limitations under the License.
 #include <sys/types.h>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 
 #include "xla/stream_executor/device_address.h"
@@ -35,7 +36,7 @@ using RaggedAllToAllOutputPtrs =
 template <typename PtrStorage, int64_t kVectorSize>
 struct RaggedAllToAllKernel {
   using KernelType = stream_executor::TypedKernel<
-      stream_executor::DeviceAddressBase, PtrStorage,
+      stream_executor::DeviceAddressBase, PtrStorage, size_t,
       stream_executor::DeviceAddressBase, stream_executor::DeviceAddressBase,
       stream_executor::DeviceAddressBase, int64_t, int64_t>;
 };
