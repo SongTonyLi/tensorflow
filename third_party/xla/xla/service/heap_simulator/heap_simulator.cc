@@ -66,6 +66,7 @@ limitations under the License.
 #include "xla/service/time_utils.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/statusor.h"
+#include "xla/union_find.h"
 #include "xla/util.h"
 
 namespace xla {
@@ -754,6 +755,7 @@ void GlobalDecreasingSizeBestFitHeap<BufferType>::Alloc(
   auto emplace_result = buffer_intervals_.emplace(
       buffer, BufferInterval{buffer, size, current_time_, -1, {}, true});
   CHECK(emplace_result.second);
+  colocation_groups_.emplace(buffer, UnionFind<ColocationClusterInfo>());
   ++current_time_;
 }
 
@@ -770,6 +772,8 @@ void GlobalDecreasingSizeBestFitHeap<BufferType>::ShareWith(
   auto emplace_result = buffer_intervals_.emplace(
       buffer, BufferInterval{buffer, size, current_time_, -1, {}, false});
   CHECK(emplace_result.second);
+  colocation_groups_.emplace(buffer, UnionFind<ColocationClusterInfo>());
+  colocation_groups_.at(share_with).Merge(&colocation_groups_.at(buffer));
   ++current_time_;
 }
 
@@ -2444,24 +2448,35 @@ GlobalDecreasingSizeBestFitHeap<BufferType>::GetSortedBufferIntervals() const {
     sorted_buffer_intervals.push_back(entry.second);
   }
 
+  // Support components invoking GetSortedBufferIntervals without
+  // Alloc/ShareWith.
+  for (const BufferInterval& interval : sorted_buffer_intervals) {
+    const BufferType* buffer = interval.buffer;
+    if (!colocation_groups_.contains(buffer)) {
+      colocation_groups_.emplace(buffer, UnionFind<ColocationClusterInfo>());
+      for (const BufferType* colocation : interval.colocations) {
+        if (!colocation_groups_.contains(colocation)) {
+          colocation_groups_.emplace(colocation,
+                                     UnionFind<ColocationClusterInfo>());
+        }
+        colocation_groups_.at(buffer).Merge(&colocation_groups_.at(colocation));
+      }
+    }
+  }
+
   // Precompute colocation time ranges for sorting.
   for (BufferInterval& interval : sorted_buffer_intervals) {
-    interval.min_colocation_start_time = interval.start;
-    interval.max_colocation_end_time = interval.end;
-    // TODO(vedernikova): Optimize this using a Union-Find algorithm updated
-    // during ShareWith() to incrementally track min/max times and sizes.
-    // Using a sorted container in the following cycle instead of the hash set
-    // would result in increasing time complexity for this function. After the
-    // optimization is implemented, we can remove the NOLINTNEXTLINE below.
-    // NOLINTNEXTLINE
-    for (const BufferType* colocation : GetTransitiveColocations(interval)) {
-      const BufferInterval& colocated_interval =
-          buffer_intervals_.at(colocation);
-      interval.min_colocation_start_time = std::min(
-          interval.min_colocation_start_time, colocated_interval.start);
-      interval.max_colocation_end_time =
-          std::max(interval.max_colocation_end_time, colocated_interval.end);
-    }
+    auto& cluster_info = colocation_groups_.at(interval.buffer).Get();
+    cluster_info.min_start_time =
+        std::min(cluster_info.min_start_time, interval.start);
+    cluster_info.max_end_time =
+        std::max(cluster_info.max_end_time, interval.end);
+    cluster_info.max_size = std::max(cluster_info.max_size, interval.size);
+  }
+  for (BufferInterval& interval : sorted_buffer_intervals) {
+    auto& cluster_info = colocation_groups_.at(interval.buffer).Get();
+    interval.min_colocation_start_time = cluster_info.min_start_time;
+    interval.max_colocation_end_time = cluster_info.max_end_time;
   }
 
   absl::c_sort(sorted_buffer_intervals, buffer_interval_compare_);
@@ -2600,6 +2615,10 @@ GlobalDecreasingSizeBestFitHeap<BufferType>::FindChunkCandidates(
 template <typename BufferType>
 int64_t GlobalDecreasingSizeBestFitHeap<BufferType>::GetMaxColocationSize(
     const BufferInterval& buffer_interval) const {
+  auto it = colocation_groups_.find(buffer_interval.buffer);
+  if (it != colocation_groups_.end() && it->second.Get().max_size != -1) {
+    return it->second.Get().max_size;
+  }
   int64_t max_colocation_size = buffer_interval.size;
   for (const BufferType* colocation :
        GetTransitiveColocations(buffer_interval)) {
@@ -2843,13 +2862,13 @@ ConstrainedGlobalDecreasingSizeBestFitHeap::FinishFastSplit() {
       continue;
     }
 
-    auto colocations = GetTransitiveColocations(buffer_interval);
-    if (colocations.empty() &&
-        buffers_without_colocations_in_expensive_pass >=
-            kMaxBuffersWithoutColocationsInExpensivePass) {
+    bool has_colocations =
+        colocation_groups_.at(buffer_interval.buffer).Size() > 1;
+    if (!has_colocations && buffers_without_colocations_in_expensive_pass >=
+                                kMaxBuffersWithoutColocationsInExpensivePass) {
       fast_pass_sorted_buffers.push_back(buffer_interval);
     } else {
-      buffers_without_colocations_in_expensive_pass += colocations.empty();
+      buffers_without_colocations_in_expensive_pass += !has_colocations;
       remaining_expensive_pass_sorted_buffers.push_back(buffer_interval);
     }
   }
