@@ -48,6 +48,7 @@ DECL_DLL_EXPORT std::atomic<int> g_trace_level(
     TraceMeRecorder::kTracingDisabled);
 DECL_DLL_EXPORT std::atomic<uint64_t> g_trace_filter_bitmap(
     std::numeric_limits<uint64_t>::max());
+DECL_DLL_EXPORT std::atomic<bool> g_enable_source_location(true);
 
 // g_trace_level implementation must be lock-free for faster execution of the
 // TraceMe API. This can be commented (if compilation is failing) but execution
@@ -181,9 +182,16 @@ class ThreadLocalRecorder {
 }
 
 /* static */ bool TraceMeRecorder::Start(int level, uint64_t filter_masks) {
+  return Start(level, filter_masks, /*enable_source_location=*/true);
+}
+
+/* static */ bool TraceMeRecorder::Start(int level, uint64_t filter_masks,
+                                         bool enable_source_location) {
   level = std::max(0, level);
   internal::g_trace_filter_bitmap.store(filter_masks,
                                         std::memory_order_relaxed);
+  internal::g_enable_source_location.store(enable_source_location,
+                                           std::memory_order_release);
 
   int expected = kTracingDisabled;
   bool started = internal::g_trace_level.compare_exchange_strong(
@@ -208,6 +216,7 @@ class ThreadLocalRecorder {
   // Clear the filter bitmap.
   internal::g_trace_filter_bitmap.store(std::numeric_limits<uint64_t>::max(),
                                         std::memory_order_relaxed);
+  internal::g_enable_source_location.store(true, std::memory_order_release);
   return events;
 }
 
