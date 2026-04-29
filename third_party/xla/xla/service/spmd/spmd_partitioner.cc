@@ -62,6 +62,7 @@ limitations under the License.
 #include "xla/layout_util.h"
 #include "xla/literal.h"
 #include "xla/literal_util.h"
+#include "xla/primitive_util.h"
 #include "xla/protobuf_util.h"
 #include "xla/service/call_graph.h"
 #include "xla/service/collective_ops_utils.h"
@@ -3716,10 +3717,21 @@ absl::Status SpmdPartitioningVisitor::HandleConstant(HloInstruction* hlo) {
   }
 
   SetPartitionedHlo(hlo, [&]() {
+    if (hlo->sharding().IsReplicatedOrSingleDevice()) {
+      return b_.AddInstruction(hlo->Clone());
+    }
+
+    // We know literal.IsAllFirst() is true.
     auto shard_shape = MakePartitionedShape(hlo->shape(), hlo->sharding());
-    std::vector<int64_t> start_indices(hlo->shape().dimensions().size(), 0);
-    auto constant = b_.AddInstruction(HloInstruction::CreateConstant(
-        literal.Slice(start_indices, shard_shape.dimensions())));
+    Literal full = Literal::Make(shard_shape).value();
+    primitive_util::ArrayTypeSwitch(
+        [&](auto type) {
+          using NativeT = primitive_util::NativeTypeOf<type>;
+          full.PopulateWithValue(literal.GetFirstElement<NativeT>());
+        },
+        literal.shape().element_type());
+    auto constant =
+        b_.AddInstruction(HloInstruction::CreateConstant(std::move(full)));
     *constant->mutable_shape() = shard_shape;
     return constant;
   });
