@@ -85,6 +85,7 @@ limitations under the License.
 #include "xla/status_macros.h"
 #include "xla/tsl/lib/gtl/iterator_range.h"
 #include "xla/tsl/lib/gtl/map_util.h"
+#include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/logging.h"  // IWYU pragma: keep
 #include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
@@ -5031,7 +5032,15 @@ static absl::Status PostOrderDFS(
       if (visitor->ShouldProcessNode(current_node)) {
         RETURN_IF_ERROR(visitor->Preprocess(current_node));
         VLOG(2) << "Visiting HLO %" << current_node->name();
-        RETURN_IF_ERROR(current_node->Visit(visitor));
+        absl::Status status = current_node->Visit(visitor);
+        if (!status.ok()) {
+          std::string stack_trace =
+              current_node->GetStackTraceStringFromMetadata(/*indent=*/2);
+          tsl::errors::AppendToMessage(
+              &status,
+              absl::StrFormat("\n\nPython Code Location:\n%s", stack_trace));
+          return status;
+        }
         visitor->SetVisitState(current_id, Visitor::kVisited);
         RETURN_IF_ERROR(visitor->Postprocess(current_node));
       } else {
