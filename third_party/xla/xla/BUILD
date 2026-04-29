@@ -670,6 +670,7 @@ cc_library(
         ":types",
         ":util",
         ":xla_data_proto_cc",
+        "//third_party/highway:hwy",
         "//xla/tsl/lib/core:bitmap",
         "//xla/tsl/lib/math:math_util",
         "//xla/tsl/platform:errors",
